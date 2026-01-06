@@ -1,0 +1,20 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = "file:./dev.db"
+}
+
+model Promotion {
+  id          Int      @id @default(autoincrement())
+  title       String
+  price       String   // String para manter formatação (R$ 1.200,00)
+  url         String
+  urlHash     String   @unique // Hash MD5 da URL ou ID do produto para evitar duplicatas
+  createdAt   DateTime @default(now())
+  sentToGroup Boolean  @default(false)
+
+  @@map("promotions")
+}
