@@ -1,7 +1,7 @@
 import { chromium, ElementHandle } from 'playwright';
 import { ScrapedPromo } from './types';
 
-const MIN_DISCOUNT_PERCENT = 25;
+const MIN_DISCOUNT_PERCENT = 30;
 
 function cleanTitle(title: string): string {
     let clean = title.replace(/\b(frete grátis|envio imediato|original|promoção|oferta|lançamento|novo|lacrado|nfc|brindes?|top)\b/gi, '');

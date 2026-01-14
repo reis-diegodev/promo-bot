@@ -1,20 +1,26 @@
 import 'dotenv/config';
 import { scrapeAmazon } from './services/scraper/amazon';
 import { scrapeMercadoLivre } from './services/scraper/mercadolivre';
+import { scrapeNetshoes } from './services/scraper/netshoes';
 import { processAndSendPromos } from './services/promo';
-import { ScrapedPromo } from './services/scraper/types';
+import { connectToWhatsApp } from './services/whatsapp/client';
 
+const MAX_OFFERS_PER_STORE = 5;
+
+// 💎 LISTA PREMIUM
 const SEARCH_TERMS = [
-    'creatina monohidratada', 'whey protein concentrado', 'tênis corrida masculino',
-    'tênis corrida feminino', 'smartwatch garmin', 'relogio amazfit',
-    'garrafa termica academia',
-    'roupa dry fit', 'pré treino', 'barra de proteina', 'fone de ouvido',
+    'Creatina Max Titanium', 'Creatina Dux Nutrition', 'Creatina Integralmedica',
+    'Whey Protein Dux', 'Whey Protein Gold Standard', 'Whey Protein Max Titanium',
+    'Pré Treino Psichotic', 'Pré Treino Haze', 'Barra de Proteina Bold', 'Barra de Proteina YoPro',
+    'Tênis Nike Corrida Masculino', 'Tênis Nike Corrida Feminino', 'Tênis Adidas Ultraboost',
+    'Tênis Asics Nimbus', 'Tênis Mizuno Wave', 'Tênis Olympikus Corre 3',
+    'Roupa Nike Dry Fit', 'Roupa Under Armour', 'Shorts Adidas Academia', 'Legging Live Fitness',
+    'Relógio Garmin Forerunner', 'Apple Watch Series', 'Smartwatch Samsung Galaxy Watch',
+    'Fone JBL Endurance', 'Garrafa Stanley Original', 'Mochila Nike Brasília'
 ];
 
-// Função de espera (Sleep) para não parecer robô
 const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-// Função para embaralhar array (Fisher-Yates Shuffle)
 function shuffleArray(array: string[]) {
     for (let i = array.length - 1; i > 0; i--) {
         const j = Math.floor(Math.random() * (i + 1));
@@ -24,51 +30,75 @@ function shuffleArray(array: string[]) {
 }
 
 async function main() {
-    console.log('🚀 Iniciando Ciclo do Promo-Bot (Modo Lote Suave)...');
+    console.log('🚀 Iniciando Ciclo do Promo-Bot (Com Assinaturas Personalizadas)...');
     
+    console.log('📱 Conectando ao WhatsApp...');
+    const sock = await connectToWhatsApp();
+    console.log('✅ Conexão estabelecida.');
+
     try {
-        // 1. Embaralha e pega 3 termos
         const termsToSearch = shuffleArray([...SEARCH_TERMS]).slice(0, 3);
-        console.log(`📋 Termos sorteados para hoje: [ ${termsToSearch.join(', ')} ]`);
+        console.log(`📋 Vitrine da rodada: [ ${termsToSearch.join(', ')} ]`);
 
-        // 2. Decide a loja da vez (Mantemos 1 loja por execução para ser rápido)
-        const isAmazon = Math.random() > 0.5;
-        const storeName = isAmazon ? 'Amazon' : 'Mercado Livre';
-        const scraperFunction = isAmazon ? scrapeAmazon : scrapeMercadoLivre;
-
-        console.log(`🏪 Loja selecionada: ${storeName}`);
-
-        // 3. Loop pelos 3 termos
         for (const term of termsToSearch) {
-            console.log(`\n--- 🔍 Buscando: "${term}" em ${storeName} ---`);
-            
+            console.log(`\n========================================`);
+            console.log(`🔎 Caçando ofertas de: "${term}"`);
+            console.log(`========================================`);
+
+            // 1. AMAZON
             try {
-                const promos = await scraperFunction(term);
-
-                if (promos.length > 0) {
-                    console.log(`   📦 ${promos.length} ofertas candidatas. Processando envio...`);
-                    await processAndSendPromos(promos);
+                const amazonPromos = await scrapeAmazon(term);
+                if (amazonPromos.length > 0) {
+                    const top = amazonPromos.slice(0, MAX_OFFERS_PER_STORE);
+                    console.log(`   📦 Amazon: ${amazonPromos.length} achadas. A enviar Top ${top.length}...`);
+                    // PASSANDO O NOME DA LOJA AQUI 👇
+                    await processAndSendPromos(top, sock, 'Amazon');
                 } else {
-                    console.log(`   ⚠️ Nada relevante (>25%) para "${term}".`);
+                    console.log(`   🍂 Amazon: Nada relevante encontrado.`);
                 }
+            } catch (err) { console.error(`   ❌ Erro Amazon:`, err); }
 
-            } catch (err) {
-                console.error(`   ❌ Erro ao buscar "${term}":`, err);
-            }
+            await wait(5000 + Math.random() * 3000); 
 
-            // 4. PAUSA ESTRATÉGICA (Anti-Bloqueio)
-            // Espera entre 10 e 15 segundos antes da próxima busca
+            // 2. MERCADO LIVRE
+            try {
+                const mlPromos = await scrapeMercadoLivre(term);
+                if (mlPromos.length > 0) {
+                    const top = mlPromos.slice(0, MAX_OFFERS_PER_STORE);
+                    console.log(`   📦 ML: ${mlPromos.length} achadas. A enviar Top ${top.length}...`);
+                    // PASSANDO O NOME DA LOJA AQUI 👇
+                    await processAndSendPromos(top, sock, 'Mercado Livre');
+                } else {
+                    console.log(`   🍂 ML: Nada relevante (>35%) encontrado.`);
+                }
+            } catch (err) { console.error(`   ❌ Erro ML:`, err); }
+
+            await wait(5000 + Math.random() * 3000); 
+
+            // 3. NETSHOES
+            try {
+                const nsPromos = await scrapeNetshoes(term);
+                if (nsPromos.length > 0) {
+                    const top = nsPromos.slice(0, MAX_OFFERS_PER_STORE);
+                    console.log(`   📦 Netshoes: ${nsPromos.length} achadas. A enviar Top ${top.length}...`);
+                    // PASSANDO O NOME DA LOJA AQUI 👇
+                    await processAndSendPromos(top, sock, 'Netshoes');
+                } else {
+                    console.log(`   🍂 Netshoes: Nada relevante (>35%) encontrado.`);
+                }
+            } catch (err) { console.error(`   ❌ Erro Netshoes:`, err); }
+
             if (term !== termsToSearch[termsToSearch.length - 1]) {
-                const delay = 10000 + Math.random() * 5000;
-                console.log(`⏳ Respirando por ${(delay/1000).toFixed(1)}s para evitar bloqueio...`);
-                await wait(delay);
+                const nextTermDelay = 10000 + Math.random() * 5000;
+                console.log(`\n🛌 A descansar antes da próxima marca... (${(nextTermDelay/1000).toFixed(1)}s)`);
+                await wait(nextTermDelay);
             }
         }
 
     } catch (error) {
-        console.error('🔥 Erro fatal no loop principal:', error);
+        console.error('🔥 Erro fatal:', error);
     } finally {
-        console.log('\n👋 Ciclo de Lote encerrado.');
+        console.log('\n👋 Ciclo encerrado.');
         process.exit(0);
     }
 }
