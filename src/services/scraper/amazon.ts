@@ -1,8 +1,16 @@
 import { chromium, ElementHandle } from 'playwright';
 import { ScrapedPromo } from './types';
 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 const MIN_DISCOUNT_PERCENT = 25;
+
+function cleanTitle(title: string): string {
+    let clean = title.replace(/\b(frete grátis|envio imediato|original|promoção|oferta|lançamento|novo|lacrado|nfc|brindes?|top)\b/gi, '');
+    clean = clean.replace(/\s+/g, ' ').trim();
+    if (clean.length > 60) {
+        return clean.substring(0, 60).trim() + '...';
+    }
+    return clean;
+}
 
 function getProductUrl(rawUrl: string): string {
     try {
@@ -122,6 +130,8 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
                     const fullLink = `https://www.amazon.com.br${relativeLink}`;
                     const finalUrl = getProductUrl(fullLink);
 
+                    const cleanTitleText = cleanTitle(title);
+
                     // AQUI ESTÁ A MUDANÇA DA IMAGEM
                     const imgEl = await card.$('img.s-image');
                     const imageUrl = await getHighResImageUrl(imgEl, card);
@@ -129,7 +139,7 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
                     console.log(`   💎 AMAZON ELITE: -${discountPercent.toFixed(0)}% OFF | "${title.substring(0, 20)}..."`);
 
                     results.push({
-                        title,
+                        title: cleanTitleText,
                         price: priceStr,
                         originalPrice: originalPriceStr,
                         url: finalUrl,

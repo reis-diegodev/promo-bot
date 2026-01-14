@@ -23,9 +23,6 @@ export async function processAndSendPromos(promos: ScrapedPromo[]) {
     let sentCount = 0;
 
     for (const promo of promos) {
-        // MUDANÇA CRÍTICA AQUI:
-        // Usamos o TÍTULO para gerar o ID único, pois a URL da Amazon muda muito.
-        // Isso evita duplicatas de produtos patrocinados.
         const uniqueKey = promo.title + promo.price; // Combina Título + Preço para ficar bem único
         const promoHash = generateHash(uniqueKey);
 
@@ -39,9 +36,15 @@ export async function processAndSendPromos(promos: ScrapedPromo[]) {
             continue;
         }
 
+        let couponLine = '';
+        if (promo.coupon) {
+            couponLine = `🎟️ *CUPOM EXTRA:* ${promo.coupon}\n`;
+        }
+
         const caption = `🔥 *${promo.title}*\n\n` +
                         `❌ De: ~${promo.originalPrice}~\n` +  
-                        `✅ Por: *${promo.price}*\n\n` +      
+                        `✅ Por: *${promo.price}*\n\n` +
+                        `${couponLine}` +      
                         `🔗 *Compre aqui:* ${promo.url}\n\n` +
                         `_🤖 Monitor de Ofertas Fitness_`;
 

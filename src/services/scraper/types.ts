@@ -4,4 +4,5 @@ export interface ScrapedPromo {
     originalPrice: string;
     url: string;
     imageUrl: string;
+    coupon?: string; // <--- NOVO CAMPO
 }
