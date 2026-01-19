@@ -1,3 +1,9 @@
+generator client {
+  provider      = "prisma-client-js"
+  // Adicionamos 'debian-openssl-3.0.x' que é o padrão do Ubuntu 22.04 (Jammy) usado na imagem
+  binaryTargets = ["native", "debian-openssl-3.0.x"]
+}
+
 datasource db {
   provider = "postgresql"
   url      = env("DATABASE_URL")
