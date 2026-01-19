@@ -6,8 +6,13 @@ export async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false, // Desligamos o QR Code nativo (que quebra no Render)
-        browser: ["PromoBot", "Chrome", "1.0.0"], // Identificação do bot
+        printQRInTerminal: false,
+        // Configurações de Estabilidade para Servidor Linux
+        browser: ["PromoBot", "Ubuntu", "3.0"], 
+        syncFullHistory: false, // Deixa o boot mais rápido
+        connectTimeoutMs: 60000, // Dá mais tempo para conectar
+        keepAliveIntervalMs: 10000, // Pinga o servidor a cada 10s para não cair
+        emitOwnEvents: false,
     });
 
     // Lógica do Código de Pareamento
@@ -15,48 +20,40 @@ export async function connectToWhatsApp() {
         const phoneNumber = process.env.BOT_PHONE_NUMBER;
 
         if (phoneNumber) {
-            // Espera um pouquinho para o socket estabilizar
+            // Aumentei o delay para 5s para garantir que o socket está pronto
             setTimeout(async () => {
                 try {
-                    // Limpa o número de caracteres não numéricos
                     const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-                    
                     console.log(`⏳ Solicitando código de pareamento para: ${cleanPhone}...`);
+                    
                     const code = await sock.requestPairingCode(cleanPhone);
                     
                     console.log('================================================');
                     console.log('🔒 CÓDIGO DE PAREAMENTO WHATSAPP:');
                     console.log(`   ${code?.match(/.{1,4}/g)?.join('-') || code}`); 
                     console.log('================================================');
-                    console.log('👉 No celular vá em: Aparelhos Conectados > Conectar > Conectar com número de telefone');
                 } catch (error) {
-                    console.error('❌ Falha ao pedir código:', error);
+                    console.error('❌ Falha ao pedir código (Tentando novamente em breve):', error);
                 }
-            }, 3000);
-        } else {
-            console.log('⚠️ BOT_PHONE_NUMBER não definido no .env. O QR Code não será exibido.');
+            }, 5000);
         }
     }
 
     sock.ev.on('creds.update', saveCreds);
 
     sock.ev.on('connection.update', (update) => {
-        const { connection, lastDisconnect, qr } = update;
-
-        // Se NÃO tiver telefone configurado, tenta mostrar o QR Code (modo fallback)
-        if (qr && !process.env.BOT_PHONE_NUMBER) {
-            console.log('⚠️ QR Code recebido (Configure BOT_PHONE_NUMBER para usar código de texto).');
-        }
+        const { connection, lastDisconnect } = update;
 
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
             console.log(`❌ Conexão caiu. Reconectando? ${shouldReconnect}`);
             
+            // Reconnect um pouco mais lento para evitar loop infinito rápido
             if (shouldReconnect) {
-                connectToWhatsApp();
+                setTimeout(() => connectToWhatsApp(), 3000);
             }
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp conectado com sucesso!');
+            console.log('✅ WhatsApp conectado e estável!');
         }
     });
 
