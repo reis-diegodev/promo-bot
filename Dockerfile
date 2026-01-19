@@ -1,16 +1,17 @@
-# Usa a imagem oficial do Playwright (Ubuntu Jammy + Node 20)
-FROM mcr.microsoft.com/playwright:v1.41.2-jammy
+# ATUALIZADO para v1.57.0-jammy (A versão que o erro pediu)
+FROM mcr.microsoft.com/playwright:v1.57.0-jammy
 
 WORKDIR /usr/src/app
 
-# Copia os arquivos de dependência
+# Copia dependências
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Instala dependências
+# Instala pacotes
 RUN npm install --unsafe-perm
 
-# Copia o código fonte
+# Copia o código
 COPY . .
 
+# Comando de inicialização (Gera Prisma + Roda Bot)
 CMD npx prisma generate && npx tsx src/index.ts
