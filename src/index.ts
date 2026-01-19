@@ -1,9 +1,15 @@
 import 'dotenv/config';
+import express from 'express';
 import { scrapeAmazon } from './services/scraper/amazon';
 import { scrapeMercadoLivre } from './services/scraper/mercadolivre';
 import { scrapeNetshoes } from './services/scraper/netshoes';
 import { processAndSendPromos } from './services/promo';
 import { connectToWhatsApp } from './services/whatsapp/client';
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+app.get('/', (req, res) => res.send('Bot is running! 🚀'));
+app.listen(PORT, () => console.log(`📡 Server listening on port ${PORT}`));
 
 const MAX_OFFERS_PER_STORE = 5;
 
