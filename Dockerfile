@@ -1,25 +1,23 @@
-# Usa uma imagem leve do Node com as dependências do Chrome
-FROM ghcr.io/puppeteer/puppeteer:21.5.2
+# Usa a imagem oficial do Playwright (já vem com Node 20 e Browsers)
+FROM mcr.microsoft.com/playwright:v1.41.2-jammy
 
-# Define variáveis de ambiente para produção
-ENV PUPPETEER_SKIP_CHROMIUM_DOWNLOAD=true \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/google-chrome-stable \
-    NODE_ENV=production
-
+# Define o diretório de trabalho
 WORKDIR /usr/src/app
 
-# Copia os arquivos de dependência
+# Copia os arquivos de configuração de dependências
 COPY package*.json ./
 COPY prisma ./prisma/
 
-# Instala as dependências
-RUN npm ci
+# Instala as dependências do projeto
+# (O --unsafe-perm ajuda a evitar problemas de permissão no Render)
+RUN npm install --unsafe-perm
 
-# Gera o cliente do Prisma
+# Gera o cliente do Prisma (para o banco de dados)
 RUN npx prisma generate
 
-# Copia o resto do código
+# Copia o restante do código do projeto
 COPY . .
 
 # Comando para iniciar o bot
+# (Usamos npx tsx diretamente)
 CMD [ "npx", "tsx", "src/index.ts" ]
