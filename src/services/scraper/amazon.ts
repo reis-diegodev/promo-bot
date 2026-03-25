@@ -131,8 +131,10 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
                 }
             } catch (err) { continue; }
         }
-    } catch (error) {
-        console.error('❌ Erro no scraper Amazon (Timeout ou Bloqueio):', error.message);
+    } catch (error: any) {
+        // Usar : any é a forma mais rápida de resolver o erro de tipagem 
+        // e permitir o acesso a error.message no Render.
+        console.error('❌ Erro no scraper Amazon (Timeout ou Bloqueio):', error?.message || error);
     } finally {
         await browser.close();
     }
