@@ -2,11 +2,12 @@ import crypto from 'crypto';
 import { prisma } from '../core/prisma';
 import { ScrapedPromo } from './scraper/types';
 import { WASocket } from '@whiskeysockets/baileys';
+import { isWhiteBackground } from './image/analyzer';
 
 // Configurações
 const REPOST_COOLDOWN_HOURS = 72;
 
-// Palavras que não agregam valor ao nome curto e devem morrer
+// Palavras que não agregam valor ao nome curto e devem ser removidas
 const FLUFF_WORDS = [
     'original', 'promoção', 'oferta', 'lançamento', 'novo', 'lacrado',
     'envio', 'imediato', 'frete', 'grátis', 'full', 'premium', 'exclusivo',
@@ -18,39 +19,31 @@ function generateHash(text: string): string {
     return crypto.createHash('md5').update(text).digest('hex');
 }
 
-// --- A NOVA MÁGICA DE TÍTULOS CURTOS ---
+// --- MÁGICA DE TÍTULOS CURTOS ---
 function smartShortenTitle(title: string): string {
     if (!title) return '';
 
     // 1. Limpeza Prévia: Remove conteúdo entre parênteses () ou colchetes []
-    // Ex: "Creatina (300g)" vira "Creatina"
     let clean = title.replace(/(\(|\[).*?(\)|\])/g, '');
 
     // 2. Corte por Separadores Lógicos
-    // Se tiver " - ", " | ", " / ", pega só o que vem antes.
-    // Ex: "Apple Watch SE - Caixa de Alumínio" vira "Apple Watch SE"
-    const separators = [' - ', ' | ', ' / ', ', ', ' – ']; // Hífen, Pipe, Barra, Vírgula, Travessão
+    const separators = [' - ', ' | ', ' / ', ', ', ' – ']; 
     for (const sep of separators) {
         if (clean.includes(sep)) {
             clean = clean.split(sep)[0];
-            break; // Paramos no primeiro separador que acharmos
+            break; 
         }
     }
 
-    // 3. Tokenização (Quebra em palavras)
+    // 3. Tokenização e Filtragem
     let words = clean.split(/\s+/);
-
-    // 4. Filtragem de Palavras Lixo (Fluff)
     words = words.filter(w => !FLUFF_WORDS.includes(w.toLowerCase()));
 
-    // 5. Limite de Palavras (O Segredo do Minimalismo)
-    // Marcas geralmente têm 2 a 4 nomes (Tênis Nike Revolution 6).
-    // Se passar de 6 palavras, cortamos.
+    // 4. Limite de Palavras
     if (words.length > 6) {
         words = words.slice(0, 6);
     }
 
-    // Reconstrói a string
     return words.join(' ').trim();
 }
 
@@ -73,7 +66,7 @@ export async function processAndSendPromos(promos: ScrapedPromo[], sock: WASocke
         const uniqueKey = promo.title + promo.price;
         const promoHash = generateHash(uniqueKey);
 
-        // Verifica Cooldown
+        // Verifica Cooldown no Banco de Dados
         const existingPromo = await prisma.promotion.findUnique({ where: { urlHash: promoHash } });
 
         if (existingPromo) {
@@ -84,17 +77,35 @@ export async function processAndSendPromos(promos: ScrapedPromo[], sock: WASocke
             console.log(`   ♻️ Reenviando oferta (Passaram ${diffInHours.toFixed(1)}h)...`);
         }
 
-        // --- APLICA A LIMPEZA NO TÍTULO AQUI ---
         const shortTitle = smartShortenTitle(promo.title);
-        // ---------------------------------------
+        
+        // --- HEURÍSTICA DE IMAGEM 3.0 (VISÃO COMPUTACIONAL) ---
+        let imageToSend = promo.imageUrl; // Imagem padrão (catálogo)
+
+        if (promo.additionalImages && promo.additionalImages.length > 0) {
+            console.log(`   🔍 Analisando visualmente ${promo.additionalImages.length} imagens para: ${shortTitle}`);
+            
+            // Percorre a galeria de imagens coletadas pelo scraper
+            for (const imgUrl of promo.additionalImages) {
+                // Analisa se a imagem tem fundo branco predominante através de pixels
+                const isWhite = await isWhiteBackground(imgUrl);
+                
+                if (!isWhite) {
+                    imageToSend = imgUrl;
+                    console.log(`   ✨ Imagem LIFESTYLE validada visualmente para: ${shortTitle}`);
+                    break; // Interrompe na primeira imagem que não for de catálogo
+                }
+            }
+        }
+        // ----------------------------------------------------
 
         let couponLine = '';
         if (promo.coupon) {
             couponLine = `🎟️ *CUPOM:* ${promo.coupon}\n`;
         }
 
-        const caption = `🔥 *${shortTitle}*\n\n` + // Usa o título curto
-                        `❌ De: ~${promo.originalPrice}~\n` +
+        const caption = `🔥 *${shortTitle}*\n\n` + 
+                        `❌ De: ~${promo.originalPrice}~\n` + 
                         `✅ Por: *${promo.price}*\n` +
                         `${couponLine}` +
                         `🔗 *Link:* ${promo.url}\n\n` +
@@ -105,22 +116,22 @@ export async function processAndSendPromos(promos: ScrapedPromo[], sock: WASocke
                 console.log(`   🚀 Enviando (${storeName}): "${shortTitle}"`);
             }
 
-            // Envio padrão (MVP - Imagem original)
-            if (promo.imageUrl) {
+            // Envio via WhatsApp
+            if (imageToSend) {
                 await sock.sendMessage(groupId, {
-                    image: { url: promo.imageUrl },
+                    image: { url: imageToSend },
                     caption: caption
                 });
             } else {
                 await sock.sendMessage(groupId, { text: caption });
             }
 
-            // Upsert no Banco
+            // Salva ou atualiza no Prisma
             await prisma.promotion.upsert({
                 where: { urlHash: promoHash },
                 update: { createdAt: new Date(), sentToGroup: true },
                 create: {
-                    title: promo.title, // Salva o título original no banco para referência
+                    title: promo.title,
                     price: promo.price,
                     url: promo.url,
                     urlHash: promoHash,
@@ -131,7 +142,7 @@ export async function processAndSendPromos(promos: ScrapedPromo[], sock: WASocke
 
             sentCount++;
 
-            // Delay Humano
+            // Delay para evitar banimento do WhatsApp
             if (index < promos.length - 1) {
                 const delayMs = 60000 + Math.random() * 30000;
                 console.log(`   ⏳ Aguardando ${(delayMs/1000).toFixed(0)}s...`);

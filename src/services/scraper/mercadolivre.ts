@@ -7,19 +7,34 @@ const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36
 function cleanTitle(title: string): string {
     let clean = title.replace(/\b(frete grátis|envio imediato|original|promoção|oferta|lançamento|novo|lacrado|nfc|brindes?|top)\b/gi, '');
     clean = clean.replace(/\s+/g, ' ').trim();
-    if (clean.length > 60) {
-        return clean.substring(0, 60).trim() + '...';
-    }
-    return clean;
+    return clean.length > 60 ? clean.substring(0, 60).trim() + '...' : clean;
 }
 
+/**
+ * LÓGICA DE LINK BLINDADA: 
+ * O ML usa links dinâmicos. A melhor forma de não quebrar o link é 
+ * capturar a URL completa e apenas remover parâmetros de busca de usuário (tracking),
+ * mantendo a estrutura que o Mercado Livre usa para o redirecionamento interno.
+ */
 function getShortMlLink(rawUrl: string): string {
     if (!rawUrl) return '';
-    const match = rawUrl.match(/(MLB-?\d+)/);
-    if (match) {
-        return `https://produto.mercadolivre.com.br/${match[1]}`;
+
+    // 1. Tenta extrair o ID MLB (Ex: MLB12345678)
+    // O ML às vezes usa hífen, às vezes não. O regex abaixo pega ambos.
+    const mlbMatch = rawUrl.match(/MLB-?(\d{8,15})/i);
+    if (mlbMatch) {
+        return `https://produto.mercadolivre.com.br/MLB-${mlbMatch[1]}`;
     }
-    return rawUrl.split('#')[0].split('?')[0];
+
+    // 2. Se for link de "pdp" (página de produto) sem MLB no nome
+    if (rawUrl.includes('/p/MLB')) {
+        return rawUrl.split('?')[0].split('#')[0];
+    }
+
+    // 3. Se for link de anúncio/redirecionamento (ex: /jm/click)
+    // Esses links SÃO sensíveis. Se limparmos o 'ad_id' ou 'click_id', eles quebram.
+    // Nesses casos, apenas removemos o excesso de 'tracking' de rede social.
+    return rawUrl.split('&site_id=')[0]; 
 }
 
 function parseMlPrice(priceText: string): number {
@@ -29,154 +44,68 @@ function parseMlPrice(priceText: string): number {
 }
 
 export async function scrapeMercadoLivre(searchTerm: string): Promise<ScrapedPromo[]> {
-    console.log(`🕵️ ML: Iniciando scrap HÍBRIDO + CUPONS para: "${searchTerm}"...`);
+    console.log(`🕵️ ML: Iniciando busca de ELITE para: "${searchTerm}"...`);
 
-    const browser = await chromium.launch({ 
-        headless: true, 
-        args: [
-            '--disable-blink-features=AutomationControlled',
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-infobars',
-            '--window-position=0,0',
-            '--ignore-certifcate-errors',
-            '--ignore-certifcate-errors-spki-list',
-            '--user-agent=' + USER_AGENT
-        ]
-    });
-
+    const browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ userAgent: USER_AGENT });
     const page = await context.newPage();
     const results: ScrapedPromo[] = [];
 
     try {
         const url = `https://lista.mercadolivre.com.br/${encodeURIComponent(searchTerm).replace(/%20/g, '-')}_NoIndex_True`;
-        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        // 'networkidle' é fundamental para que o ML termine de processar os scripts de preço
+        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
         
-        console.log('📜 ML: Rolando página...');
-        await page.evaluate(async () => {
-            for (let i = 0; i < document.body.scrollHeight; i += 400) { 
-                window.scrollTo(0, i);
-                await new Promise(resolve => setTimeout(resolve, 80));
-            }
-        });
-
         const cards = await page.$$('li.ui-search-layout__item');
-        console.log(`🔎 Cards analisados no ML: ${cards.length}`);
 
-        for (const card of cards.slice(0, 40)) { 
+        for (const card of cards.slice(0, 20)) { 
             try {
-                // TÍTULO (Usando as HTMLElement dentro do eval para garantir tipagem no contexto do browser)
-                let rawTitle = await card.$eval('.ui-search-item__title', el => (el as HTMLElement).innerText).catch(() => '');
-                if (!rawTitle) rawTitle = await card.$eval('.poly-component__title', el => (el as HTMLElement).innerText).catch(() => '');
-                if (!rawTitle) continue;
+                // TÍTULO E PREÇOS (Seletores Híbridos)
+                const title = await card.$eval('.poly-component__title, .ui-search-item__title', el => (el as HTMLElement).innerText).catch(() => '');
+                if (!title) continue;
+
+                const originalPriceText = await card.$eval('.andes-money-amount--previous .andes-money-amount__fraction', el => (el as HTMLElement).innerText).catch(() => '');
+                const currentPriceText = await card.$eval('.poly-price__current .andes-money-amount__fraction, .ui-search-price__second-line .price-tag-fraction', el => (el as HTMLElement).innerText).catch(() => '');
                 
-                const title = cleanTitle(rawTitle);
+                if (!originalPriceText || !currentPriceText) continue;
 
-                // PREÇO ANTIGO
-                let originalPriceText = await card.$eval('.ui-search-price__original-value .price-tag-text-sr-only', el => (el as HTMLElement).innerText).catch(() => '');
-                if (!originalPriceText) originalPriceText = await card.$eval('.ui-search-price__original-value .price-tag-fraction', el => (el as HTMLElement).innerText).catch(() => '');
-                if (!originalPriceText) originalPriceText = await card.$eval('.andes-money-amount--previous .andes-money-amount__fraction', el => (el as HTMLElement).innerText).catch(() => '');
-                if (!originalPriceText) originalPriceText = await card.$eval('s .andes-money-amount__fraction', el => (el as HTMLElement).innerText).catch(() => '');
-
-                if (!originalPriceText) continue;
-
-                // PREÇO ATUAL
-                let currentPriceText = '';
-                // Poly Layout
-                currentPriceText = await card.$eval('.poly-price__current .andes-money-amount__fraction', el => (el as HTMLElement).innerText).catch(() => '');
-                if (currentPriceText) {
-                     const cents = await card.$eval('.poly-price__current .andes-money-amount__cents', el => (el as HTMLElement).innerText).catch(() => '00');
-                     currentPriceText = `${currentPriceText},${cents}`;
-                }
-                
-                // Classic Layout fallback
-                if (!currentPriceText) {
-                    // Nota: Aqui não usamos $eval, usamos $, então 'el' é um ElementHandle
-                    const elHandle = await card.$('.ui-search-price__second-line .price-tag-fraction');
-                    if (elHandle) {
-                        // CORREÇÃO: Usamos .innerText() (método assíncrono do Playwright)
-                        const r = await elHandle.innerText();
-                        const c = await card.$eval('.ui-search-price__second-line .price-tag-cents', el => (el as HTMLElement).innerText).catch(() => '00');
-                        currentPriceText = `${r},${c}`;
-                    }
-                }
-
-                // Fallback final
-                if (!currentPriceText) {
-                     const priceFractions = await card.$$('.andes-money-amount__fraction');
-                     if (priceFractions.length > 0) {
-                         // CORREÇÃO: Acesso ao array de handles e chamada do método .innerText()
-                         const lastPriceHandle = priceFractions[priceFractions.length - 1];
-                         currentPriceText = await lastPriceHandle.innerText();
-                     }
-                }
-
-                // MATEMÁTICA
                 const originalNum = parseMlPrice(originalPriceText);
                 const currentNum = parseMlPrice(currentPriceText);
-                if (originalNum <= currentNum || originalNum === 0) continue;
                 const discountPercent = ((originalNum - currentNum) / originalNum) * 100;
 
                 if (discountPercent < MIN_DISCOUNT_PERCENT) continue;
 
-                // CUPONS (Correção de tipos aqui também)
-                let coupon = '';
+                // URL - Captura mais genérica da tag 'a' para evitar erros de layout
+                const rawLink = await card.$eval('a', el => (el as HTMLAnchorElement).href).catch(() => '');
+                const finalUrl = getShortMlLink(rawLink);
+                if (!finalUrl) continue;
+
+                // IMAGENS - Tentativa de pegar a galeria se disponível
+                const mainImage = await card.$eval('img', el => el.getAttribute('data-src') || el.getAttribute('src') || '').catch(() => '');
                 
-                // Tenta Poly Pill
-                let couponText = await card.$eval('.poly-coupons__pill', el => (el as HTMLElement).innerText).catch(() => '');
+                // NOVIDADE: Captura do atributo de múltiplas imagens do card (se existir)
+                const additionalImages: string[] = [mainImage];
+                const dataImages = await card.$eval('.poly-component__picture, .ui-search-result-image__element', el => el.getAttribute('data-images')).catch(() => null);
                 
-                // Tenta Wrapper
-                if (!couponText) {
-                    couponText = await card.$eval('.poly-component__coupons', el => (el as HTMLElement).innerText).catch(() => '');
+                if (dataImages) {
+                    const extraImages = dataImages.split(',');
+                    additionalImages.push(...extraImages);
                 }
 
-                // Tenta Fallback Antigo
-                if (!couponText) {
-                    const greenTxtHandle = await card.$('.ui-search-price__discount');
-                    if (greenTxtHandle) {
-                        // CORREÇÃO: Método .innerText() no handle
-                        const txt = await greenTxtHandle.innerText();
-                        if (txt.includes('CUPOM')) couponText = txt;
-                    }
-                }
-
-                if (couponText) {
-                    coupon = couponText.replace(/cupom/gi, '').trim();
-                }
-
-                // LINK
-                let rawLink = await card.$eval('a.ui-search-link', el => el.getAttribute('href')).catch(() => '');
-                if (!rawLink) rawLink = await card.$eval('a.poly-component__title', el => el.getAttribute('href')).catch(() => '');
-                const finalUrl = getShortMlLink(rawLink || '');
-
-                // IMAGEM
-                let imageUrl = await card.$eval('img.ui-search-result-image__element', el => el.getAttribute('src')).catch(() => '');
-                if (!imageUrl) imageUrl = await card.$eval('img.poly-component__picture', el => el.getAttribute('src')).catch(() => '');
-                if (!imageUrl || !imageUrl.startsWith('http')) {
-                    const imgElHandle = await card.$('img');
-                    if (imgElHandle) {
-                        imageUrl = await imgElHandle.getAttribute('data-src') || await imgElHandle.getAttribute('src') || '';
-                    }
-                }
-
-                if (finalUrl && imageUrl) {
-                    const couponLog = coupon ? `| 🎟️ Cupom: ${coupon}` : '';
-                    console.log(`   💎 ML: -${discountPercent.toFixed(0)}%${couponLog} | "${title}"`);
-                    
-                    results.push({
-                        title,
-                        price: currentPriceText,
-                        originalPrice: originalPriceText,
-                        url: finalUrl,
-                        imageUrl,
-                        coupon: coupon || undefined
-                    });
-                }
-
+                results.push({
+                    title: cleanTitle(title),
+                    price: currentPriceText,
+                    originalPrice: originalPriceText,
+                    url: finalUrl,
+                    imageUrl: mainImage,
+                    additionalImages // Agora o analyzer terá opções REAIS para fugir do fundo branco
+                });
             } catch (err) { continue; }
         }
-    } catch (error) { console.error('❌ Erro ML:', error); } 
-    finally { await browser.close(); }
+    } catch (error) { 
+        console.error('❌ Erro crítico no Scraper ML:', error); 
+    } finally { 
+        await browser.close(); 
+    }
     return results;
 }

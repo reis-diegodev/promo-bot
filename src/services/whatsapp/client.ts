@@ -1,61 +1,51 @@
-import makeWASocket, { DisconnectReason, useMultiFileAuthState } from '@whiskeysockets/baileys';
+import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import Pino from 'pino';
 
 export async function connectToWhatsApp() {
-    const { state, saveCreds } = await useMultiFileAuthState('auth_info_baileys');
+    const authPath = 'auth_info_baileys';
+    const { state, saveCreds } = await useMultiFileAuthState(authPath);
+    const { version } = await fetchLatestBaileysVersion();
 
     const sock = makeWASocket({
         auth: state,
         printQRInTerminal: false,
-        // Configurações de Estabilidade para Servidor Linux
-        browser: ["PromoBot", "Ubuntu", "3.0"], 
-        syncFullHistory: false, // Deixa o boot mais rápido
-        connectTimeoutMs: 60000, // Dá mais tempo para conectar
-        keepAliveIntervalMs: 10000, // Pinga o servidor a cada 10s para não cair
-        emitOwnEvents: false,
+        logger: Pino({ level: 'error' }),
+        version,
+        browser: ["Ubuntu", "Chrome", "131.0.6778.204"],
+        syncFullHistory: false,
+        shouldSyncHistoryMessage: () => false,
+        connectTimeoutMs: 60000,
     });
-
-    // Lógica do Código de Pareamento
-    if (!sock.authState.creds.registered) {
-        const phoneNumber = process.env.BOT_PHONE_NUMBER;
-
-        if (phoneNumber) {
-            // Aumentei o delay para 5s para garantir que o socket está pronto
-            setTimeout(async () => {
-                try {
-                    const cleanPhone = phoneNumber.replace(/[^0-9]/g, '');
-                    console.log(`⏳ Solicitando código de pareamento para: ${cleanPhone}...`);
-                    
-                    const code = await sock.requestPairingCode(cleanPhone);
-                    
-                    console.log('================================================');
-                    console.log('🔒 CÓDIGO DE PAREAMENTO WHATSAPP:');
-                    console.log(`   ${code?.match(/.{1,4}/g)?.join('-') || code}`); 
-                    console.log('================================================');
-                } catch (error) {
-                    console.error('❌ Falha ao pedir código (Tentando novamente em breve):', error);
-                }
-            }, 5000);
-        }
-    }
 
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', (update) => {
+    sock.ev.on('connection.update', async (update) => {
         const { connection, lastDisconnect } = update;
-
         if (connection === 'close') {
             const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            console.log(`❌ Conexão caiu. Reconectando? ${shouldReconnect}`);
-            
-            // Reconnect um pouco mais lento para evitar loop infinito rápido
-            if (shouldReconnect) {
-                setTimeout(() => connectToWhatsApp(), 3000);
-            }
+            if (shouldReconnect) setTimeout(() => connectToWhatsApp(), 10000);
         } else if (connection === 'open') {
-            console.log('✅ WhatsApp conectado e estável!');
+            console.log('✅ WHATSAPP CONECTADO!');
         }
     });
+
+    // ÚNICA SOLICITAÇÃO DE CÓDIGO - COM DELAY DE 20s PARA SEGURANÇA
+    if (!sock.authState.creds.registered) {
+        setTimeout(async () => {
+            try {
+                const phoneNumber = "5581993203695";
+                console.log(`⏳ Solicitando CÓDIGO ÚNICO para: ${phoneNumber}...`);
+                const code = await sock.requestPairingCode(phoneNumber);
+                console.log('================================================');
+                console.log('🔒 CÓDIGO DE PAREAMENTO (DIGITE AGORA):');
+                console.log(`   ${code}`);
+                console.log('================================================');
+            } catch (err) {
+                console.error("⚠️ Falha ao gerar código. Tente reiniciar em 1 minuto.");
+            }
+        }, 20000); // 20 segundos de espera para o socket estabilizar
+    }
 
     return sock;
 }

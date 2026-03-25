@@ -5,6 +5,5 @@ dist/
 *.db-journal
 logs/
 *.log
-auth_info_baileys/
 .DS_Store
 Thumbs.db
