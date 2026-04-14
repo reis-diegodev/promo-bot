@@ -1,5 +1,8 @@
-import makeWASocket, { DisconnectReason, useMultiFileAuthState, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
-import { Boom } from '@hapi/boom';
+import makeWASocket, {
+    DisconnectReason,
+    useMultiFileAuthState,
+    fetchLatestBaileysVersion
+} from '@whiskeysockets/baileys';
 import Pino from 'pino';
 
 export async function connectToWhatsApp() {
@@ -9,42 +12,37 @@ export async function connectToWhatsApp() {
 
     const sock = makeWASocket({
         auth: state,
-        printQRInTerminal: false,
-        logger: Pino({ level: 'error' }),
+        printQRInTerminal: false, // Usaremos o código de pareamento
+        logger: Pino({ level: 'silent' }),
         version,
         browser: ["Ubuntu", "Chrome", "131.0.6778.204"],
+        markOnlineOnConnect: false,       // Não mostra você como "Online" ao conectar
         syncFullHistory: false,
         shouldSyncHistoryMessage: () => false,
         connectTimeoutMs: 60000,
+        defaultQueryTimeoutMs: 0, // Sem timeout para queries
+        keepAliveIntervalMs: 10000,
     });
 
+    // Salva as credenciais sempre que houver atualização
     sock.ev.on('creds.update', saveCreds);
 
-    sock.ev.on('connection.update', async (update) => {
-        const { connection, lastDisconnect } = update;
-        if (connection === 'close') {
-            const shouldReconnect = (lastDisconnect?.error as Boom)?.output?.statusCode !== DisconnectReason.loggedOut;
-            if (shouldReconnect) setTimeout(() => connectToWhatsApp(), 10000);
-        } else if (connection === 'open') {
-            console.log('✅ WHATSAPP CONECTADO!');
-        }
-    });
-
-    // ÚNICA SOLICITAÇÃO DE CÓDIGO - COM DELAY DE 20s PARA SEGURANÇA
+    // SOLICITAÇÃO DE CÓDIGO (Apenas se não estiver registrado)
     if (!sock.authState.creds.registered) {
+        // Delay de 10s para garantir que o socket estabilizou a tentativa de conexão
         setTimeout(async () => {
             try {
                 const phoneNumber = "5581993203695";
                 console.log(`⏳ Solicitando CÓDIGO ÚNICO para: ${phoneNumber}...`);
                 const code = await sock.requestPairingCode(phoneNumber);
-                console.log('================================================');
-                console.log('🔒 CÓDIGO DE PAREAMENTO (DIGITE AGORA):');
+                console.log('\n================================================');
+                console.log('🔒 CÓDIGO DE PAREAMENTO (DIGITE AGORA NO CELULAR):');
                 console.log(`   ${code}`);
-                console.log('================================================');
+                console.log('================================================\n');
             } catch (err) {
-                console.error("⚠️ Falha ao gerar código. Tente reiniciar em 1 minuto.");
+                console.error("⚠️ Falha ao gerar código. Verifique se o número está correto.");
             }
-        }, 20000); // 20 segundos de espera para o socket estabilizar
+        }, 10000);
     }
 
     return sock;

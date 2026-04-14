@@ -2,12 +2,25 @@ import crypto from 'crypto';
 import { prisma } from '../core/prisma';
 import { ScrapedPromo } from './scraper/types';
 import { WASocket } from '@whiskeysockets/baileys';
-import { isWhiteBackground } from './image/analyzer';
+import { getBestImage } from '../modules/image/image.service';
+import { generateMeliAffiliateLink } from './scraper/affiliate';
+import { addToQueue } from '../queue/message.queue';
 
-// Configurações
 const REPOST_COOLDOWN_HOURS = 72;
 
-// Palavras que não agregam valor ao nome curto e devem ser removidas
+// --------------------
+// UTILIDADES
+// --------------------
+
+function generateHash(text: string): string {
+    return crypto.createHash('md5').update(text).digest('hex');
+}
+
+function parsePrice(priceStr: string): number {
+    const clean = priceStr.replace(/[R$\s.]/g, '').replace(',', '.');
+    return parseFloat(clean) || 0;
+}
+
 const FLUFF_WORDS = [
     'original', 'promoção', 'oferta', 'lançamento', 'novo', 'lacrado',
     'envio', 'imediato', 'frete', 'grátis', 'full', 'premium', 'exclusivo',
@@ -15,34 +28,23 @@ const FLUFF_WORDS = [
     'wifi', '4g', '5g', 'unissex', 'adulto', 'infantil'
 ];
 
-function generateHash(text: string): string {
-    return crypto.createHash('md5').update(text).digest('hex');
-}
-
-// --- MÁGICA DE TÍTULOS CURTOS ---
 function smartShortenTitle(title: string): string {
     if (!title) return '';
 
-    // 1. Limpeza Prévia: Remove conteúdo entre parênteses () ou colchetes []
     let clean = title.replace(/(\(|\[).*?(\)|\])/g, '');
 
-    // 2. Corte por Separadores Lógicos
-    const separators = [' - ', ' | ', ' / ', ', ', ' – ']; 
+    const separators = [' - ', ' | ', ' / ', ', ', ' – '];
     for (const sep of separators) {
         if (clean.includes(sep)) {
             clean = clean.split(sep)[0];
-            break; 
+            break;
         }
     }
 
-    // 3. Tokenização e Filtragem
     let words = clean.split(/\s+/);
     words = words.filter(w => !FLUFF_WORDS.includes(w.toLowerCase()));
 
-    // 4. Limite de Palavras
-    if (words.length > 6) {
-        words = words.slice(0, 6);
-    }
+    if (words.length > 6) words = words.slice(0, 6);
 
     return words.join(' ').trim();
 }
@@ -52,109 +54,135 @@ const STORE_SIGNATURES: Record<string, string> = {
     'Mercado Livre': '⚡ *Direto do MELI!*',
     'Netshoes': '🏃 *Corre na Netshoes!*',
     'Shopee': '🛍️ *Achado na Shopee!*',
-    'Default': '🔥 *Oferta Fitness*'
+    'Default': '🔥 *Oferta*'
 };
 
-export async function processAndSendPromos(promos: ScrapedPromo[], sock: WASocket, storeName: string) {
+// --------------------
+// CORE SERVICE
+// --------------------
+
+async function shouldSendPromo(hash: string): Promise<boolean> {
+    const existing = await prisma.promotion.findUnique({
+        where: { urlHash: hash }
+    });
+
+    if (!existing) return true;
+
+    const diffHours =
+        (Date.now() - new Date(existing.createdAt).getTime()) / 36e5;
+
+    return diffHours >= REPOST_COOLDOWN_HOURS;
+}
+
+async function buildAffiliateUrl(
+    url: string,
+    storeName: string,
+    shortTitle: string
+): Promise<string> {
+    if (storeName === 'Mercado Livre') {
+        return generateMeliAffiliateLink(url);
+    }
+    return url;
+}
+
+function buildCaption(promo: ScrapedPromo, shortTitle: string, link: string, storeName: string) {
+    const signature = STORE_SIGNATURES[storeName] || STORE_SIGNATURES['Default'];
+
+    const couponLine = promo.coupon
+        ? `🎟️ *CUPOM:* ${promo.coupon}\n`
+        : '';
+
+    return `🔥 *${shortTitle}*\n\n` +
+        `❌ De: ~${promo.originalPrice}~\n` +
+        `✅ Por: *${promo.price}*\n` +
+        `${couponLine}` +
+        `🔗 *LINK EXCLUSIVO:* ${link}\n\n` +
+        `${signature}`;
+}
+
+async function savePromo(promo: ScrapedPromo, hash: string, url: string) {
+    await prisma.promotion.upsert({
+        where: { urlHash: hash },
+        update: {
+            createdAt: new Date(),
+            sentToGroup: true
+        },
+        create: {
+            title: promo.title,
+            price: promo.price,
+            url,
+            urlHash: hash,
+            sentToGroup: true,
+            createdAt: new Date()
+        }
+    });
+}
+
+// --------------------
+// MAIN FLOW
+// --------------------
+
+export async function processAndSendPromos(
+    promos: ScrapedPromo[],
+    sock: WASocket,
+    storeName: string
+) {
     const groupId = process.env.TARGET_GROUP_ID;
-    if (!groupId) throw new Error('❌ TARGET_GROUP_ID não definido no .env');
+    if (!groupId) throw new Error('TARGET_GROUP_ID não definido');
 
     let sentCount = 0;
-    const footerSignature = STORE_SIGNATURES[storeName] || STORE_SIGNATURES['Default'];
 
-    for (const [index, promo] of promos.entries()) {
-        const uniqueKey = promo.title + promo.price;
-        const promoHash = generateHash(uniqueKey);
-
-        // Verifica Cooldown no Banco de Dados
-        const existingPromo = await prisma.promotion.findUnique({ where: { urlHash: promoHash } });
-
-        if (existingPromo) {
-            const lastSent = new Date(existingPromo.createdAt);
-            const now = new Date();
-            const diffInHours = Math.abs(now.getTime() - lastSent.getTime()) / 36e5;
-            if (diffInHours < REPOST_COOLDOWN_HOURS) continue; 
-            console.log(`   ♻️ Reenviando oferta (Passaram ${diffInHours.toFixed(1)}h)...`);
-        }
-
-        const shortTitle = smartShortenTitle(promo.title);
-        
-        // --- HEURÍSTICA DE IMAGEM 3.0 (VISÃO COMPUTACIONAL) ---
-        let imageToSend = promo.imageUrl; // Imagem padrão (catálogo)
-
-        if (promo.additionalImages && promo.additionalImages.length > 0) {
-            console.log(`   🔍 Analisando visualmente ${promo.additionalImages.length} imagens para: ${shortTitle}`);
-            
-            // Percorre a galeria de imagens coletadas pelo scraper
-            for (const imgUrl of promo.additionalImages) {
-                // Analisa se a imagem tem fundo branco predominante através de pixels
-                const isWhite = await isWhiteBackground(imgUrl);
-                
-                if (!isWhite) {
-                    imageToSend = imgUrl;
-                    console.log(`   ✨ Imagem LIFESTYLE validada visualmente para: ${shortTitle}`);
-                    break; // Interrompe na primeira imagem que não for de catálogo
-                }
-            }
-        }
-        // ----------------------------------------------------
-
-        let couponLine = '';
-        if (promo.coupon) {
-            couponLine = `🎟️ *CUPOM:* ${promo.coupon}\n`;
-        }
-
-        const caption = `🔥 *${shortTitle}*\n\n` + 
-                        `❌ De: ~${promo.originalPrice}~\n` + 
-                        `✅ Por: *${promo.price}*\n` +
-                        `${couponLine}` +
-                        `🔗 *Link:* ${promo.url}\n\n` +
-                        `${footerSignature}`;
-
+    for (const promo of promos) {
         try {
-            if (!existingPromo) {
-                console.log(`   🚀 Enviando (${storeName}): "${shortTitle}"`);
-            }
+            const hash = generateHash(promo.title + promo.price);
 
-            // Envio via WhatsApp
-            if (imageToSend) {
-                await sock.sendMessage(groupId, {
-                    image: { url: imageToSend },
-                    caption: caption
-                });
-            } else {
-                await sock.sendMessage(groupId, { text: caption });
-            }
+            const canSend = await shouldSendPromo(hash);
+            if (!canSend) continue;
 
-            // Salva ou atualiza no Prisma
-            await prisma.promotion.upsert({
-                where: { urlHash: promoHash },
-                update: { createdAt: new Date(), sentToGroup: true },
-                create: {
-                    title: promo.title,
-                    price: promo.price,
-                    url: promo.url,
-                    urlHash: promoHash,
-                    sentToGroup: true,
-                    createdAt: new Date()
-                }
+            const shortTitle = smartShortenTitle(promo.title);
+
+            // 💰 LINK AFILIADO
+            const affiliateUrl = await buildAffiliateUrl(
+                promo.url,
+                storeName,
+                shortTitle
+            );
+
+            // 🖼️ IMAGEM
+            const bestImage = await getBestImage(
+                shortTitle,
+                promo.additionalImages || [promo.imageUrl]
+            );
+
+            // 📝 CAPTION
+            const caption = buildCaption(
+                promo,
+                shortTitle,
+                affiliateUrl,
+                storeName
+            );
+
+            // 📤 FILA
+            addToQueue({
+                image: bestImage,
+                caption,
+                groupId
             });
+
+            // 💾 PERSISTÊNCIA
+            await savePromo(promo, hash, affiliateUrl);
 
             sentCount++;
 
-            // Delay para evitar banimento do WhatsApp
-            if (index < promos.length - 1) {
-                const delayMs = 60000 + Math.random() * 30000;
-                console.log(`   ⏳ Aguardando ${(delayMs/1000).toFixed(0)}s...`);
-                await new Promise(r => setTimeout(r, delayMs));
-            }
+            // ⏱️ Delay anti-ban
+            const delay = Math.floor(Math.random() * (10 - 5 + 1) + 5) * 60 * 1000;
+            console.log(`✅ Adicionado à fila (${sentCount}) | Próximo em ${delay / 60000}min`);
+            await new Promise(resolve => setTimeout(resolve, delay));
 
         } catch (error) {
-            console.error(`   ❌ Falha envio:`, error);
+            console.error('❌ Erro ao processar promo:', error);
         }
     }
-    
-    if (sentCount > 0) {
-        console.log(`   ✅ ${sentCount} mensagens processadas.`);
-    }
+
+    console.log(`🚀 Total enviado: ${sentCount}`);
 }

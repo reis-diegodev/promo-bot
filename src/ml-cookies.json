@@ -1,0 +1,92 @@
+[
+  {
+    "name": "_d2id",
+    "value": "93353b0f-313b-4dad-95fe-29ce9645bab6-n",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1806358100.352509,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_csrf",
+    "value": "hC1N1e7sWQJQKwtM64K4Qcm_",
+    "domain": "www.mercadolivre.com.br",
+    "path": "/",
+    "expires": -1,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_mldataSessionId",
+    "value": "5088fc83-f984-422c-8813-7ba9fd120453",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1774823905,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "c_TP3d4",
+    "value": "1",
+    "domain": ".www.mercadolivre.com.br",
+    "path": "/",
+    "expires": 1777414100.368846,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "cp",
+    "value": "53540090",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1777414100.369144,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "inferredZipcode",
+    "value": "true",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1777414100.369337,
+    "httpOnly": true,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_hjSessionUser_720738",
+    "value": "eyJpZCI6IjMwN2E5ZGE3LWQ5YTQtNWJhNS04Y2EyLWRlNzcxMzBmMWI1OSIsImNyZWF0ZWQiOjE3NzQ4MjIxMDQyNjEsImV4aXN0aW5nIjpmYWxzZX0=",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1806358104,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "_hjSession_720738",
+    "value": "eyJpZCI6IjVmZTgyNDIzLTM3ZGQtNDg1My1iMjJiLTRjZTJkN2RlNzA5YiIsImMiOjE3NzQ4MjIxMDQyNjQsInMiOjAsInIiOjAsInNiIjowLCJzciI6MCwic2UiOjAsImZzIjoxLCJzcCI6MX0=",
+    "domain": ".mercadolivre.com.br",
+    "path": "/",
+    "expires": 1774823904,
+    "httpOnly": false,
+    "secure": true,
+    "sameSite": "None"
+  },
+  {
+    "name": "g_state",
+    "value": "{\"i_l\":0,\"i_ll\":1774822104898,\"i_b\":\"Pk63Vdpx5ScY627W7kGpFj1Rt1dJeVPnX9J9x1HG0vI\",\"i_e\":{\"enable_itp_optimization\":0}}",
+    "domain": "www.mercadolivre.com.br",
+    "path": "/",
+    "expires": 1790374104,
+    "httpOnly": false,
+    "secure": false,
+    "sameSite": "Lax"
+  }
+]

@@ -7,3 +7,5 @@ logs/
 *.log
 .DS_Store
 Thumbs.db
+chrome-profile
+auth_info_baileys

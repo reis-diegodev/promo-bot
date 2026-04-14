@@ -20,3 +20,10 @@ model Promotion {
 
   @@map("promotions")
 }
+
+model ImageCache {
+  id        String   @id @default(cuid())
+  query     String   @unique
+  imageUrl  String
+  createdAt DateTime @default(now())
+}

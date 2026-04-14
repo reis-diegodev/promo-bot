@@ -31,13 +31,9 @@ function parsePrice(priceStr: string): number {
     return parseFloat(cleanStr);
 }
 
-// Extrai a imagem em alta resolução e tenta encontrar outras na galeria do card
 async function getImagesFromCard(imgEl: ElementHandle<SVGElement | HTMLElement> | null): Promise<{ main: string, all: string[] }> {
     if (!imgEl) return { main: '', all: [] };
-
     const allImages: string[] = [];
-    
-    // Tenta pegar a imagem principal via srcset (maior qualidade)
     const srcset = await imgEl.getAttribute('srcset').catch(() => '');
     let mainUrl = await imgEl.getAttribute('src').catch(() => '') || '';
 
@@ -46,14 +42,11 @@ async function getImagesFromCard(imgEl: ElementHandle<SVGElement | HTMLElement> 
         const lastPart = parts[parts.length - 1].trim();
         const largestUrl = lastPart.split(' ')[0];
         if (largestUrl && largestUrl.startsWith('http')) {
-            mainUrl = largestUrl.replace(/\._AC_.*_\./, '.'); // Remove sufixo de redimensionamento
+            mainUrl = largestUrl.replace(/\._AC_.*_\./, '.');
         }
     }
-
     allImages.push(mainUrl);
 
-    // No card de busca, a Amazon as vezes coloca variações no atributo data-image-variant-urls
-    // Isso é ouro para a nossa lógica de fundo branco!
     const variants = await imgEl.getAttribute('data-image-variant-urls').catch(() => null);
     if (variants) {
         try {
@@ -61,7 +54,6 @@ async function getImagesFromCard(imgEl: ElementHandle<SVGElement | HTMLElement> 
             allImages.push(...variantList);
         } catch (e) { /* ignore */ }
     }
-
     return { main: mainUrl, all: allImages };
 }
 
@@ -74,7 +66,7 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
     });
     
     const context = await browser.newContext({
-        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         viewport: { width: 1280, height: 720 }
     });
     
@@ -84,14 +76,16 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
     try {
         const url = `https://www.amazon.com.br/s?k=${encodeURIComponent(searchTerm)}`;
         
-        // AJUSTE DE TIMEOUT PARA O RENDER: 60s e waitUntil 'networkidle'
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
+        // ESTRATÉGIA DE EVASÃO: 'commit' é mais rápido e evita timeouts de scripts de rastreio
+        await page.goto(url, { waitUntil: 'commit', timeout: 45000 });
 
-        // Scroll suave para carregar imagens lazy-load
-        await page.evaluate(async () => {
-            window.scrollBy(0, 800);
-            await new Promise(r => setTimeout(r, 500));
+        // Espera manual apenas pelos cards, sem travar o processo
+        await page.waitForSelector('[data-component-type="s-search-result"]', { timeout: 15000 }).catch(() => {
+            console.log('⚠️ Aviso: Cards demoraram, tentando prosseguir...');
         });
+
+        await page.evaluate(() => window.scrollBy(0, 600));
+        await new Promise(r => setTimeout(r, 2000));
 
         const cards = await page.$$('[data-component-type="s-search-result"]');
         
@@ -115,8 +109,6 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
                 
                 if (relativeLink) {
                     const finalUrl = getProductUrl(`https://www.amazon.com.br${relativeLink}`);
-                    
-                    // BUSCA DE IMAGENS PARA O ANALYZER
                     const imgEl = await card.$('img.s-image');
                     const { main, all } = await getImagesFromCard(imgEl);
 
@@ -126,18 +118,15 @@ export async function scrapeAmazon(searchTerm: string): Promise<ScrapedPromo[]> 
                         originalPrice: originalPriceStr,
                         url: finalUrl,
                         imageUrl: main,
-                        additionalImages: all // Agora o promo.ts tem a galeria para fugir do fundo branco!
+                        additionalImages: all
                     });
                 }
             } catch (err) { continue; }
         }
     } catch (error: any) {
-        // Usar : any é a forma mais rápida de resolver o erro de tipagem 
-        // e permitir o acesso a error.message no Render.
-        console.error('❌ Erro no scraper Amazon (Timeout ou Bloqueio):', error?.message || error);
+        console.error('❌ Erro no scraper Amazon:', error?.message || error);
     } finally {
         await browser.close();
     }
-
     return results;
 }

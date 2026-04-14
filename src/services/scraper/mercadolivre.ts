@@ -1,8 +1,13 @@
-import { chromium } from 'playwright';
+import { chromium } from 'playwright-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
+import * as path from 'path';
 import { ScrapedPromo } from './types';
 
-const MIN_DISCOUNT_PERCENT = 40; 
-const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
+chromium.use(StealthPlugin());
+
+const MIN_DISCOUNT_PERCENT = 5;
+const CHROME_USER_DATA = path.join(process.cwd(), 'chrome-profile');
+const CHROME_EXECUTABLE = 'C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe';
 
 function cleanTitle(title: string): string {
     let clean = title.replace(/\b(frete grátis|envio imediato|original|promoção|oferta|lançamento|novo|lacrado|nfc|brindes?|top)\b/gi, '');
@@ -10,31 +15,53 @@ function cleanTitle(title: string): string {
     return clean.length > 60 ? clean.substring(0, 60).trim() + '...' : clean;
 }
 
-/**
- * LÓGICA DE LINK BLINDADA: 
- * O ML usa links dinâmicos. A melhor forma de não quebrar o link é 
- * capturar a URL completa e apenas remover parâmetros de busca de usuário (tracking),
- * mantendo a estrutura que o Mercado Livre usa para o redirecionamento interno.
- */
+function isValidMlbId(id: string): boolean {
+    return id.length >= 9;
+}
+
 function getShortMlLink(rawUrl: string): string {
     if (!rawUrl) return '';
 
-    // 1. Tenta extrair o ID MLB (Ex: MLB12345678)
-    // O ML às vezes usa hífen, às vezes não. O regex abaixo pega ambos.
-    const mlbMatch = rawUrl.match(/MLB-?(\d{8,15})/i);
-    if (mlbMatch) {
-        return `https://produto.mercadolivre.com.br/MLB-${mlbMatch[1]}`;
+    if (rawUrl.includes('click1.mercadolivre')) {
+        const searchVariationMatch = rawUrl.match(/searchVariation=(MLB[A-Z]?)(\d+)/i);
+        if (searchVariationMatch && isValidMlbId(searchVariationMatch[2])) {
+            return `https://www.mercadolivre.com.br/p/${searchVariationMatch[1]}${searchVariationMatch[2]}`;
+        }
+        const widMatch = rawUrl.match(/wid=(MLB[A-Z]?)(\d+)/i);
+        if (widMatch && isValidMlbId(widMatch[2])) {
+            return `https://www.mercadolivre.com.br/${widMatch[1]}${widMatch[2]}`;
+        }
+        return '';
     }
 
-    // 2. Se for link de "pdp" (página de produto) sem MLB no nome
-    if (rawUrl.includes('/p/MLB')) {
-        return rawUrl.split('?')[0].split('#')[0];
+    const fichaMatch = rawUrl.match(/\/p\/(MLB[A-Z]?)(\d+)/i);
+    if (fichaMatch && isValidMlbId(fichaMatch[2])) {
+        return `https://www.mercadolivre.com.br/p/${fichaMatch[1]}${fichaMatch[2]}`;
     }
 
-    // 3. Se for link de anúncio/redirecionamento (ex: /jm/click)
-    // Esses links SÃO sensíveis. Se limparmos o 'ad_id' ou 'click_id', eles quebram.
-    // Nesses casos, apenas removemos o excesso de 'tracking' de rede social.
-    return rawUrl.split('&site_id=')[0]; 
+    const upMatch = rawUrl.match(/\/up\/(MLB[A-Z]?)(\d+)/i);
+    if (upMatch && isValidMlbId(upMatch[2])) {
+        return `https://www.mercadolivre.com.br/p/${upMatch[1]}${upMatch[2]}`;
+    }
+
+    if (rawUrl.includes('produto.mercadolivre.com.br')) {
+        return rawUrl.split('#')[0].split('?')[0];
+    }
+
+    const mlbMatch = rawUrl.match(/\/(MLB[A-Z]?)(\d{9,15})/i);
+    if (mlbMatch && isValidMlbId(mlbMatch[2])) {
+        return `https://www.mercadolivre.com.br/${mlbMatch[1]}${mlbMatch[2]}`;
+    }
+
+    return '';
+}
+
+function toHighRes(url: string): string {
+    if (!url) return '';
+    return url
+        .replace(/-[A-Z]\.jpg/, '-O.jpg')
+        .replace(/_\d+x\d+\.jpg/, '.jpg')
+        .replace(/\?.*$/, '');
 }
 
 function parseMlPrice(priceText: string): number {
@@ -44,29 +71,54 @@ function parseMlPrice(priceText: string): number {
 }
 
 export async function scrapeMercadoLivre(searchTerm: string): Promise<ScrapedPromo[]> {
-    console.log(`🕵️ ML: Iniciando busca de ELITE para: "${searchTerm}"...`);
+    console.log(`🕵️ ML: Buscando "${searchTerm}"...`);
 
-    const browser = await chromium.launch({ headless: true });
-    const context = await browser.newContext({ userAgent: USER_AGENT });
-    const page = await context.newPage();
+    const browser = await chromium.launchPersistentContext(CHROME_USER_DATA, {
+        executablePath: CHROME_EXECUTABLE,
+        headless: true,
+        args: ['--profile-directory=Default'],
+        userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36',
+        locale: 'pt-BR',
+        timezoneId: 'America/Sao_Paulo',
+    });
+
+    const page = await browser.newPage();
     const results: ScrapedPromo[] = [];
 
     try {
         const url = `https://lista.mercadolivre.com.br/${encodeURIComponent(searchTerm).replace(/%20/g, '-')}_NoIndex_True`;
-        // 'networkidle' é fundamental para que o ML termine de processar os scripts de preço
-        await page.goto(url, { waitUntil: 'networkidle', timeout: 60000 });
-        
-        const cards = await page.$$('li.ui-search-layout__item');
 
-        for (const card of cards.slice(0, 20)) { 
+        console.log(`🌐 Acessando: ${url}`);
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+
+        const pageTitle = await page.title();
+        console.log(`📄 Título: ${pageTitle}`);
+
+        await page.waitForSelector('li.ui-search-layout__item', { timeout: 20000 })
+            .catch(() => console.warn('⚠️ Cards não apareceram em 20s'));
+
+        const cards = await page.$$('li.ui-search-layout__item');
+        console.log(`📦 Cards encontrados: ${cards.length}`);
+
+        if (cards.length === 0) return [];
+
+        for (const card of cards.slice(0, 10)) {
             try {
-                // TÍTULO E PREÇOS (Seletores Híbridos)
-                const title = await card.$eval('.poly-component__title, .ui-search-item__title', el => (el as HTMLElement).innerText).catch(() => '');
+                const title = await card.$eval(
+                    '.poly-component__title, .ui-search-item__title',
+                    el => (el as HTMLElement).innerText
+                ).catch(() => '');
                 if (!title) continue;
 
-                const originalPriceText = await card.$eval('.andes-money-amount--previous .andes-money-amount__fraction', el => (el as HTMLElement).innerText).catch(() => '');
-                const currentPriceText = await card.$eval('.poly-price__current .andes-money-amount__fraction, .ui-search-price__second-line .price-tag-fraction', el => (el as HTMLElement).innerText).catch(() => '');
-                
+                const originalPriceText = await card.$eval(
+                    '.andes-money-amount--previous .andes-money-amount__fraction',
+                    el => (el as HTMLElement).innerText
+                ).catch(() => '');
+                const currentPriceText = await card.$eval(
+                    '.poly-price__current .andes-money-amount__fraction, .ui-search-price__second-line .price-tag-fraction',
+                    el => (el as HTMLElement).innerText
+                ).catch(() => '');
+
                 if (!originalPriceText || !currentPriceText) continue;
 
                 const originalNum = parseMlPrice(originalPriceText);
@@ -75,22 +127,24 @@ export async function scrapeMercadoLivre(searchTerm: string): Promise<ScrapedPro
 
                 if (discountPercent < MIN_DISCOUNT_PERCENT) continue;
 
-                // URL - Captura mais genérica da tag 'a' para evitar erros de layout
-                const rawLink = await card.$eval('a', el => (el as HTMLAnchorElement).href).catch(() => '');
+                const rawLink = await card.$eval(
+                    'a.poly-component__title-wrapper, a.poly-component__title, a.ui-search-link',
+                    el => (el as HTMLAnchorElement).href
+                ).catch(() => '');
+
                 const finalUrl = getShortMlLink(rawLink);
                 if (!finalUrl) continue;
 
-                // IMAGENS - Tentativa de pegar a galeria se disponível
-                const mainImage = await card.$eval('img', el => el.getAttribute('data-src') || el.getAttribute('src') || '').catch(() => '');
-                
-                // NOVIDADE: Captura do atributo de múltiplas imagens do card (se existir)
-                const additionalImages: string[] = [mainImage];
-                const dataImages = await card.$eval('.poly-component__picture, .ui-search-result-image__element', el => el.getAttribute('data-images')).catch(() => null);
-                
-                if (dataImages) {
-                    const extraImages = dataImages.split(',');
-                    additionalImages.push(...extraImages);
-                }
+                const allImgs = await card.$$eval('img', (els: Element[]) =>
+                    (els as HTMLImageElement[]).map(el =>
+                        el.getAttribute('data-src') || el.getAttribute('src') || ''
+                    ).filter(src => src.startsWith('http'))
+                ).catch((): string[] => []);
+
+                const additionalImages = [...new Set(allImgs.map(toHighRes))].filter(Boolean);
+                const mainImage = additionalImages[0] || '';
+
+                console.log(`🖼️ ${additionalImages.length} imgs | "${cleanTitle(title)}"`);
 
                 results.push({
                     title: cleanTitle(title),
@@ -98,14 +152,16 @@ export async function scrapeMercadoLivre(searchTerm: string): Promise<ScrapedPro
                     originalPrice: originalPriceText,
                     url: finalUrl,
                     imageUrl: mainImage,
-                    additionalImages // Agora o analyzer terá opções REAIS para fugir do fundo branco
+                    additionalImages
                 });
             } catch (err) { continue; }
         }
-    } catch (error) { 
-        console.error('❌ Erro crítico no Scraper ML:', error); 
-    } finally { 
-        await browser.close(); 
+    } catch (error) {
+        console.error('❌ Erro crítico no Scraper ML:', error);
+    } finally {
+        await browser.close().catch(() => {});
     }
+
+    console.log(`✅ ML: ${results.length} promos para "${searchTerm}"`);
     return results;
 }
