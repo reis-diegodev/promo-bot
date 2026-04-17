@@ -1,38 +1,41 @@
 // src/modules/image/providers/marketplace.provider.ts
 
 interface MeliPicture {
-    id: string;
-    url: string;
-    secure_url: string;
-    max_size: string;
+  id: string;
+  url?: string;
+  secure_url?: string;
+  max_size?: string;
+}
+
+interface MeliItemResponse {
+  id: string;
+  pictures?: MeliPicture[];
 }
 
 export async function getMeliProductImages(mlbId: string): Promise<string[]> {
-    try {
-        const isUniversal = mlbId.toUpperCase().startsWith('MLBU');
-        const endpoint = isUniversal
-            ? `https://api.mercadolibre.com/products/${mlbId}/pictures`
-            : `https://api.mercadolibre.com/items/${mlbId}/pictures`;
+  try {
+    const endpoint = `https://api.mercadolibre.com/items/${mlbId}`;
 
-        console.log(`📡 Buscando pictures: ${endpoint}`);
+    console.log(`📡 Buscando item ML: ${endpoint}`);
 
-        const response = await fetch(endpoint, {
-            headers: { 'Accept': 'application/json' }
-        });
+    const response = await fetch(endpoint, {
+      headers: {
+        Accept: 'application/json',
+      },
+    });
 
-        if (!response.ok) {
-            console.warn(`⚠️ ML Pictures API erro ${response.status} para ${mlbId}`);
-            return [];
-        }
-
-        const pictures: MeliPicture[] = await response.json();
-
-        return pictures
-            .map(p => p.secure_url || p.url)
-            .filter(Boolean);
-
-    } catch (error) {
-        console.error(`❌ Erro ao buscar imagens ML para ${mlbId}:`, error);
-        return [];
+    if (!response.ok) {
+      console.warn(`⚠️ ML Item API erro ${response.status} para ${mlbId}`);
+      return [];
     }
+
+    const item: MeliItemResponse = await response.json();
+
+    return (item.pictures || [])
+      .map((picture) => picture.secure_url || picture.url || '')
+      .filter(Boolean);
+  } catch (error) {
+    console.error(`❌ Erro ao buscar imagens ML para ${mlbId}:`, error);
+    return [];
+  }
 }
